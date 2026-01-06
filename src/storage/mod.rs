@@ -1,4 +1,4 @@
-use crate::query::{ColumnId, RowId, TableId};
+use crate::executor::{ColumnId, RowId, TableId};
 use std::cmp::PartialEq;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::SeekFrom;

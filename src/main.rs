@@ -1,3 +1,4 @@
+pub mod executor;
 pub mod query;
 pub mod storage;
 pub mod transact;
