@@ -1,4 +1,5 @@
 pub mod lexer;
+pub mod parser;
 
 pub struct TxId(pub u64);
 pub struct TableId(pub u64);
@@ -27,8 +28,6 @@ enum Command {
     DropColumn {
         table_id: TableId,
         col_id: ColumnId,
-        col_name: String,
-        col_type: String,
     },
     // Row operations
     InsertRow {
