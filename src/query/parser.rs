@@ -6,23 +6,18 @@ use std::mem::{discriminant, replace};
 pub enum Stmt {
     Create {
         table: Box<str>,
-        defs: Box<Clause>,
         clauses: Vec<Clause>,
     },
     Insert {
         table: Box<str>,
-        columns: Box<Clause>,
-        values: Box<Clause>,
         clauses: Vec<Clause>,
     },
     Select {
         table: Box<str>,
-        columns: Box<Clause>,
         clauses: Vec<Clause>,
     },
     Update {
         table: Box<str>,
-        assigns: Box<Clause>,
         clauses: Vec<Clause>,
     },
     Delete {
@@ -200,13 +195,10 @@ impl Parser {
         self.expect(&Token::Create)?;
         self.expect(&Token::Table)?;
         let table = self.consume_ident()?;
-        let defs = self.parse_defs_clause()?;
-        let clauses = self.parse_optional_clauses()?;
-        Ok(Stmt::Create {
-            table,
-            defs: defs.boxed(),
-            clauses,
-        })
+        let mut clauses = vec![];
+        clauses.push(self.parse_defs_clause()?);
+        clauses.extend(self.parse_optional_clauses()?);
+        Ok(Stmt::Create { table, clauses })
     }
 
     fn parse_insert(&mut self) -> Result<Stmt> {
@@ -214,19 +206,16 @@ impl Parser {
         self.expect(&Token::Insert)?;
         self.expect(&Token::Into)?;
         let table = self.consume_ident()?;
+        let mut clauses = vec![];
         // 부분 컬럼 선택 '(<col1>, <col2>, ...)' 처리
-        let columns = if &self.curr == &Token::LParen {
-            self.parse_columns_clause()?
-        } else {
-            Clause::Columns(vec![])
-        };
+        if &self.curr == &Token::LParen {
+            clauses.push(self.parse_columns_clause()?);
+        }
         self.expect(&Token::Values)?;
-        let values = self.parse_values_clause()?;
-        let clauses = self.parse_optional_clauses()?;
+        clauses.push(self.parse_defs_clause()?);
+        // INSERT는 부가 절이 없음
         Ok(Stmt::Insert {
             table,
-            columns: columns.boxed(),
-            values: values.boxed(),
             clauses,
         })
     }
@@ -234,18 +223,16 @@ impl Parser {
     fn parse_select(&mut self) -> Result<Stmt> {
         // SELECT <col1>, <col2>, ... FROM <table> [WHERE ...] [ORDER BY ...] [LIMIT ...]
         self.expect(&Token::Select)?;
+        let mut clauses = vec![];
         // 전체 컬럼 선택 '*' 처리
-        let columns = if !self.maybe(&Token::Mul)? {
-            self.parse_columns_clause()?
-        } else {
-            Clause::Columns(vec![])
-        };
+        if !self.maybe(&Token::Mul)? {
+            clauses.push(self.parse_columns_clause()?);
+        }
         self.expect(&Token::From)?;
         let table = self.consume_ident()?;
-        let clauses = self.parse_optional_clauses()?;
+        clauses.extend(self.parse_optional_clauses()?);
         Ok(Stmt::Select {
             table,
-            columns: columns.boxed(),
             clauses,
         })
     }
@@ -255,11 +242,11 @@ impl Parser {
         self.expect(&Token::Update)?;
         let table = self.consume_ident()?;
         self.expect(&Token::Set)?;
-        let assigns = self.parse_assigns_clause()?;
-        let clauses = self.parse_optional_clauses()?;
+        let mut clauses = vec![];
+        clauses.push(self.parse_assigns_clause()?);
+        clauses.extend(self.parse_optional_clauses()?);
         Ok(Stmt::Update {
             table,
-            assigns: assigns.boxed(),
             clauses,
         })
     }
