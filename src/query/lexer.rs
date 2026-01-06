@@ -19,25 +19,26 @@ pub enum Token {
     // 식별자
     Ident(String),
     // 키워드
-    Create, // CREATE
-    Table,  // TABLE
-    Insert, // INSERT
-    Into,   // INTO
-    Values, // VALUES
-    Select, // SELECT
-    From,   // FROM
-    Update, // UPDATE
-    Set,    // SET
-    Alter,  // ALTER
-    Delete, // DELETE
-    Drop,   // DROP
-    Union,  // UNION
-    Where,  // WHERE
-    Order,  // ORDER
-    By,     // BY
-    Asc,    // ASC
-    Desc,   // DESC
-    Limit,  // LIMIT
+    Create,   // CREATE
+    Table,    // TABLE
+    Insert,   // INSERT
+    Into,     // INTO
+    Values,   // VALUES
+    Select,   // SELECT
+    From,     // FROM
+    Update,   // UPDATE
+    Set,      // SET
+    Alter,    // ALTER
+    Delete,   // DELETE
+    Drop,     // DROP
+    Union,    // UNION
+    Where,    // WHERE
+    Order,    // ORDER
+    By,       // BY
+    Asc,      // ASC
+    Desc,     // DESC
+    Limit,    // LIMIT
+    Distinct, // DISTINCT
     // 구분자
     Dot,       // .
     Comma,     // ,
@@ -252,6 +253,7 @@ impl Lexer {
             "ASC" => Token::Asc,
             "DESC" => Token::Desc,
             "LIMIT" => Token::Limit,
+            "DISTINCT" => Token::Distinct,
             // 연산자
             "NOT" => Token::Not,
             "AND" => Token::And,
