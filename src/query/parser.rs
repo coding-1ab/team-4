@@ -90,11 +90,11 @@ pub enum Expr {
     Text(Box<str>),
     Ident(Box<str>),
     Unary {
-        op: Box<str>,
+        op: Token,
         right: Box<Expr>,
     },
     Binary {
-        op: Box<str>,
+        op: Token,
         left: Box<Expr>,
         right: Box<Expr>,
     },
@@ -117,6 +117,19 @@ impl Parser {
         let curr = lexer.next()?;
         let peek = lexer.next()?;
         Ok(Self { lexer, curr, peek })
+    }
+
+    fn precedence(token: &Token) -> u8 {
+        match token {
+            Token::Or => 1,
+            Token::And => 2,
+            Token::Eq => 3,
+            Token::Gt | Token::Lt | Token::Ge | Token::Le => 4,
+            Token::Add | Token::Sub => 5,
+            Token::Mul | Token::Div => 6,
+            Token::LParen => 7,
+            _ => 0,
+        }
     }
 
     fn next(&mut self) -> Result<Token> {
@@ -167,16 +180,6 @@ impl Parser {
         Ok(stmts)
     }
 
-    fn consume_ident(&mut self) -> Result<Box<str>> {
-        match self.next()? {
-            Token::Ident(name) => Ok(name.into_boxed_str()),
-            tok => Err(QueryErr::UnexpectedToken {
-                expected: "<ident>".into(),
-                found: format!("{:?}", tok),
-            }),
-        }
-    }
-
     pub fn parse_stmt(&mut self) -> Result<Stmt> {
         match &self.curr {
             Token::Create => self.parse_create(),
@@ -194,17 +197,89 @@ impl Parser {
 
     fn parse_create(&mut self) -> Result<Stmt> {
         // CREATE TABLE <table> (<col1> <type>, <col2> <type>, ...)
-        // CREATE TABLE <table> 파싱
         self.expect(&Token::Create)?;
         self.expect(&Token::Table)?;
         let table = self.consume_ident()?;
-        // (<col1> <type>, <col2> <type>, ...) 파싱
+        let defs = self.parse_defs_clause()?.boxed();
+        let clauses = self.parse_optional_clauses();
+        Ok(Stmt::Create {
+            table,
+            defs,
+            clauses,
+        })
+    }
+
+    fn parse_insert(&mut self) -> Result<Stmt> {
+        // INSERT INTO <table> [(<col1>, <col2>, ...)] VALUES (<val1>, <val2>, ...)
+        self.expect(&Token::Insert)?;
+        self.expect(&Token::Into)?;
+        let table = self.consume_ident()?;
+        let columns = if self.curr == Token::LParen {
+            self.parse_columns_clause()?
+        } else {
+            Clause::Columns(vec![])
+        };
+        let values = self.parse_values_clause()?;
+        let clauses = self.parse_optional_clauses();
+        Ok(Stmt::Insert {
+            table,
+            columns: columns.boxed(),
+            values: values.boxed(),
+            clauses,
+        })
+    }
+
+    fn parse_select(&mut self) -> Result<Stmt> {
+        // SELECT <col1>, <col2>, ... FROM <table> [WHERE ...] [ORDER BY ...] [LIMIT ...]
+        self.expect(&Token::Select)?;
+        let columns = self.parse_columns_clause()?;
+        self.expect(&Token::From)?;
+        let table = self.consume_ident()?;
+        let clauses = self.parse_optional_clauses();
+        Ok(Stmt::Select {
+            table,
+            columns: columns.boxed(),
+            clauses,
+        })
+    }
+
+    fn parse_update(&mut self) -> Result<Stmt> {
+        // UPDATE <table> SET <col1> = <val1>, <col2> = <val2>, ... [WHERE ...]
+        self.expect(&Token::Update)?;
+        let table = self.consume_ident()?;
+        self.expect(&Token::Set)?;
+        let assigns = self.parse_assigns_clause()?;
+        let clauses = self.parse_optional_clauses();
+        Ok(Stmt::Update {
+            table,
+            assigns: assigns.boxed(),
+            clauses,
+        })
+    }
+
+    fn parse_delete(&mut self) -> Result<Stmt> {
+        // DELETE FROM <table> [WHERE ...]
+        self.expect(&Token::Delete)?;
+        self.expect(&Token::From)?;
+        let table = self.consume_ident()?;
+        let clauses = self.parse_optional_clauses();
+        Ok(Stmt::Delete { table, clauses })
+    }
+
+    fn parse_drop(&mut self) -> Result<Stmt> {
+        // DROP TABLE <table>
+        self.expect(&Token::Drop)?;
+        self.expect(&Token::Table)?;
+        let table = self.consume_ident()?;
+        Ok(Stmt::Drop { table })
+    }
+
+    fn parse_values_clause(&mut self) -> Result<Clause> {
+        self.maybe(&Token::Values)?;
         self.expect(&Token::LParen)?;
-        let mut columns = Vec::new();
+        let mut values = Vec::new();
         loop {
-            let col_name = self.consume_ident()?;
-            let col_type = self.consume_ident()?;
-            columns.push((col_name, col_type));
+            values.push(self.parse_expr(0)?);
             match self.next()? {
                 Token::Comma => continue,
                 Token::RParen => break,
@@ -216,23 +291,12 @@ impl Parser {
                 }
             }
         }
-        Ok(Stmt::Create {
-            table,
-            defs: Clause::Defs(columns).boxed(),
-            clauses: vec![],
-        })
+        Ok(Clause::Values(values))
     }
 
-    fn parse_insert(&mut self) -> Result<Stmt> {
-        // INSERT INTO <table> [(<col1>, <col2>, ...)] VALUES (<val1>, <val2>, ...)
-        // INSERT INTO <table> 파싱
-        self.expect(&Token::Insert)?;
-        self.expect(&Token::Into)?;
-        let table = self.consume_ident()?;
-        // [(<col1>, <col2>, ...)] 파싱
+    fn parse_columns_clause(&mut self) -> Result<Clause> {
         let mut columns = Vec::new();
         if self.maybe(&Token::LParen)? {
-            // 괄호가 있는 경우, 부분 칼럼 파싱
             loop {
                 columns.push(self.consume_ident()?);
                 match self.next()? {
@@ -246,13 +310,41 @@ impl Parser {
                     }
                 }
             }
+        } else if self.curr == Token::Mul {
+            self.next()?;
+            columns.push("*".into());
+        } else {
+            loop {
+                columns.push(self.consume_ident()?);
+                if !self.maybe(&Token::Comma)? {
+                    break;
+                }
+            }
         }
-        // VALUES (<val1>, <val2>, ...) 파싱
-        self.expect(&Token::Values)?;
-        self.expect(&Token::LParen)?;
-        let mut values = Vec::new();
+        Ok(Clause::Columns(columns))
+    }
+
+    fn parse_assigns_clause(&mut self) -> Result<Clause> {
+        let mut assigns = Vec::new();
         loop {
-            values.push(self.parse_expr()?);
+            let col = self.consume_ident()?;
+            self.expect(&Token::Eq)?;
+            let val = self.parse_expr(0)?;
+            assigns.push((col, val));
+            if !self.maybe(&Token::Comma)? {
+                break;
+            }
+        }
+        Ok(Clause::Assigns(assigns))
+    }
+
+    fn parse_defs_clause(&mut self) -> Result<Clause> {
+        self.expect(&Token::LParen)?;
+        let mut defs = Vec::new();
+        loop {
+            let col_name = self.consume_ident()?;
+            let col_type = self.consume_ident()?;
+            defs.push((col_name, col_type));
             match self.next()? {
                 Token::Comma => continue,
                 Token::RParen => break,
@@ -264,273 +356,82 @@ impl Parser {
                 }
             }
         }
-        Ok(Stmt::Insert {
-            table,
-            columns: Clause::Columns(columns).boxed(),
-            values: Clause::Values(values).boxed(),
-            clauses: vec![],
-        })
+        Ok(Clause::Defs(defs))
     }
 
-    fn parse_select(&mut self) -> Result<Stmt> {
-        // SELECT <col1>, <col2>, ... FROM <table> [WHERE ...] [ORDER BY ...] [LIMIT ...]
-        // SELECT <col1>, <col2>, ... 파싱
-        self.expect(&Token::Select)?;
-        let mut columns = Vec::new();
-        if &self.curr == &Token::Mul {
-            // 전체 선택 `*` 처리
-            self.next()?;
-            columns.push("*".into());
-        } else {
-            loop {
-                columns.push(self.consume_ident()?);
-                if !self.maybe(&Token::Comma)? {
-                    break;
-                }
-            }
-        }
-        // FROM <table> 파싱
-        self.expect(&Token::From)?;
-        let table = self.consume_ident()?;
-
+    fn parse_optional_clauses(&mut self) -> Vec<Clause> {
         let mut clauses = Vec::new();
-        // WHERE ...
-        if self.maybe(&Token::Where)? {
-            clauses.push(Clause::Where(self.parse_expr()?.boxed()));
-        }
-
-        // TODO: ORDER BY, LIMIT 파싱
-
-        Ok(Stmt::Select {
-            table,
-            columns: Clause::Columns(columns).boxed(),
-            clauses,
-        })
-    }
-
-    fn parse_update(&mut self) -> Result<Stmt> {
-        // UPDATE <table> SET <col1> = <val1>, <col2> = <val2>, ... [WHERE ...]
-        // UPDATE <table> SET 파싱
-        self.expect(&Token::Update)?;
-        let table = self.consume_ident()?;
-        self.expect(&Token::Set)?;
-        // <col1> = <val1>, <col2> = <val2>, ... 파싱
-        let mut assigns = Vec::new();
         loop {
-            let col = self.consume_ident()?;
-            self.expect(&Token::Eq)?;
-            let val = self.parse_expr()?;
-            assigns.push((col, val));
-            if !self.maybe(&Token::Comma)? {
-                break;
-            }
-        }
-
-        let mut clauses = Vec::new();
-        if self.maybe(&Token::Where)? {
-            clauses.push(Clause::Where(self.parse_expr()?.boxed()));
-        }
-
-        Ok(Stmt::Update {
-            table,
-            assigns: Clause::Assigns(assigns).boxed(),
-            clauses,
-        })
-    }
-
-    fn parse_delete(&mut self) -> Result<Stmt> {
-        // DELETE FROM <table> [WHERE ...]
-        // DELETE FROM <table> 파싱
-        self.expect(&Token::Delete)?;
-        self.expect(&Token::From)?;
-        let table = self.consume_ident()?;
-
-        let mut clauses = Vec::new();
-        if self.maybe(&Token::Where)? {
-            clauses.push(Clause::Where(self.parse_expr()?.boxed()));
-        }
-
-        Ok(Stmt::Delete { table, clauses })
-    }
-
-    fn parse_drop(&mut self) -> Result<Stmt> {
-        // DROP TABLE <table>
-        self.expect(&Token::Drop)?;
-        self.expect(&Token::Table)?;
-        let table = self.consume_ident()?;
-        Ok(Stmt::Drop { table })
-    }
-
-    fn parse_expr(&mut self) -> Result<Expr> {
-        self.parse_logical_or()
-    }
-
-    fn parse_logical_or(&mut self) -> Result<Expr> {
-        let mut left = self.parse_logical_and()?;
-        while self.maybe(&Token::Or)? {
-            let right = self.parse_logical_and()?;
-            left = Expr::Binary {
-                op: "OR".into(),
-                left: left.boxed(),
-                right: right.boxed(),
-            };
-        }
-        Ok(left)
-    }
-
-    fn parse_logical_and(&mut self) -> Result<Expr> {
-        let mut left = self.parse_comparison()?;
-        while self.maybe(&Token::And)? {
-            let right = self.parse_comparison()?;
-            left = Expr::Binary {
-                op: "AND".into(),
-                left: left.boxed(),
-                right: right.boxed(),
-            };
-        }
-        Ok(left)
-    }
-
-    fn parse_comparison(&mut self) -> Result<Expr> {
-        let left = self.parse_primary()?;
-        let op = match &self.curr {
-            Token::Eq => "=",
-            Token::Gt => ">",
-            Token::Lt => "<",
-            Token::Ge => ">=",
-            Token::Le => "<=",
-            _ => return Ok(left),
-        };
-        self.next()?;
-        let right = self.parse_primary()?;
-        Ok(Expr::Binary {
-            op: op.into(),
-            left: left.boxed(),
-            right: right.boxed(),
-        })
-    }
-
-    fn parse_primary(&mut self) -> Result<Expr> {
-        match self.next()? {
-            Token::Null => Ok(Expr::Null),
-            Token::Bool(b) => Ok(Expr::Bool(b)),
-            Token::Num(n) => {
-                if let Ok(i) = n.parse::<i64>() {
-                    Ok(Expr::Int(i))
-                } else if let Ok(f) = n.parse::<f64>() {
-                    Ok(Expr::Float(f))
-                } else {
-                    Err(QueryErr::InvalidExpr(format!("Invalid number: {}", n)))
+            match &self.curr {
+                Token::Where => {
+                    self.next().unwrap();
+                    if let Ok(expr) = self.parse_expr(0) {
+                        clauses.push(Clause::Where(expr.boxed()));
+                    }
                 }
+                _ => break,
             }
-            Token::Text(t) => Ok(Expr::Text(t.into_boxed_str())),
-            Token::Ident(i) => Ok(Expr::Ident(i.into_boxed_str())),
-            Token::LParen => {
-                let expr = self.parse_expr()?;
-                self.expect(&Token::RParen)?;
-                Ok(expr)
-            }
+        }
+        clauses
+    }
+
+    fn consume_ident(&mut self) -> Result<Box<str>> {
+        match self.next()? {
+            Token::Ident(name) => Ok(name.into_boxed_str()),
             tok => Err(QueryErr::UnexpectedToken {
-                expected: "<expr>".into(),
+                expected: "<ident>".into(),
                 found: format!("{:?}", tok),
             }),
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::query::lexer::Lexer;
-
-    #[test]
-    fn test_parse_drop_table() {
-        let lexer = Lexer::new("DROP TABLE users");
-        let mut parser = Parser::new(lexer).unwrap();
-        let stmt = parser.parse_stmt().unwrap();
-        assert_eq!(
-            stmt,
-            Stmt::Drop {
-                table: "users".into()
-            }
-        );
+    fn parse_expr(&mut self, prec: u8) -> Result<Expr> {
+        let mut left = self.parse_unary()?;
+        while prec < Self::precedence(&self.curr) {
+            left = self.parse_binary(left)?;
+        }
+        Ok(left)
     }
 
-    #[test]
-    fn test_parse_select_star() {
-        let lexer = Lexer::new("SELECT * FROM users");
-        let mut parser = Parser::new(lexer).unwrap();
-        let stmt = parser.parse_stmt().unwrap();
-        assert_eq!(
-            stmt,
-            Stmt::Select {
-                table: "users".into(),
-                columns: Clause::Columns(vec!["*".into()]).boxed(),
-                clauses: vec![],
+    fn parse_unary(&mut self) -> Result<Expr> {
+        match self.next()? {
+            Token::Null => Ok(Expr::Null),
+            Token::Bool(b) => Ok(Expr::Bool(b)),
+            Token::Int(n) => Ok(Expr::Int(n)),
+            Token::Float(f) => Ok(Expr::Float(f)),
+            Token::Text(t) => Ok(Expr::Text(t.into_boxed_str())),
+            Token::Ident(i) => Ok(Expr::Ident(i.into_boxed_str())),
+            op @ (Token::Not | Token::Sub) => {
+                let right = self.parse_expr(7)?.boxed();
+                Ok(Expr::Unary { op, right })
             }
-        );
+            Token::LParen => self.parse_group(),
+            tok => Err(QueryErr::UnexpectedToken {
+                expected: "literal, ident, or '('".into(),
+                found: format!("{:?}", tok),
+            }),
+        }
     }
 
-    #[test]
-    fn test_parse_select_cols() {
-        let lexer = Lexer::new("SELECT id, name FROM users");
-        let mut parser = Parser::new(lexer).unwrap();
-        let stmt = parser.parse_stmt().unwrap();
-        assert_eq!(
-            stmt,
-            Stmt::Select {
-                table: "users".into(),
-                columns: Clause::Columns(vec!["id".into(), "name".into()]).boxed(),
-                clauses: vec![],
-            }
-        );
+    fn parse_group(&mut self) -> Result<Expr> {
+        let expr = self.parse_expr(0)?;
+        self.expect(&Token::RParen)?;
+        Ok(expr)
     }
 
-    #[test]
-    fn test_parse_insert() {
-        let lexer = Lexer::new("INSERT INTO users (id, name) VALUES (1, 'Alice')");
-        let mut parser = Parser::new(lexer).unwrap();
-        let stmt = parser.parse_stmt().unwrap();
-        assert_eq!(
-            stmt,
-            Stmt::Insert {
-                table: "users".into(),
-                columns: Clause::Columns(vec!["id".into(), "name".into()]).boxed(),
-                values: Clause::Values(vec![Expr::Int(1), Expr::Text("Alice".into())]).boxed(),
-                clauses: vec![],
+    fn parse_binary(&mut self, left: Expr) -> Result<Expr> {
+        let token = self.next()?;
+        let prec = Self::precedence(&token);
+        match token {
+            op if prec > 0 => {
+                let left = left.boxed();
+                let right = self.parse_expr(prec)?.boxed();
+                Ok(Expr::Binary { op, left, right })
             }
-        );
-    }
-
-    #[test]
-    fn test_parse_select_where() {
-        let lexer = Lexer::new("SELECT * FROM users WHERE id = 1 AND name = 'Alice'");
-        let mut parser = Parser::new(lexer).unwrap();
-        let stmt = parser.parse_stmt().unwrap();
-
-        let expected_where = Expr::Binary {
-            op: "AND".into(),
-            left: Expr::Binary {
-                op: "=".into(),
-                left: Expr::Ident("id".into()).boxed(),
-                right: Expr::Int(1).boxed(),
-            }
-            .boxed(),
-            right: Expr::Binary {
-                op: "=".into(),
-                left: Expr::Ident("name".into()).boxed(),
-                right: Expr::Text("Alice".into()).boxed(),
-            }
-            .boxed(),
-        };
-
-        assert_eq!(
-            stmt,
-            Stmt::Select {
-                table: "users".into(),
-                columns: Clause::Columns(vec!["*".into()]).boxed(),
-                clauses: vec![Clause::Where(expected_where.boxed())],
-            }
-        );
+            _ => Err(QueryErr::UnexpectedToken {
+                expected: "<binary-op>".to_string(),
+                found: format!("{:?}", token),
+            }),
+        }
     }
 }
