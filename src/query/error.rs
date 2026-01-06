@@ -8,4 +8,6 @@ pub enum QueryErr {
     UnterminatedText,
     InvalidIdent,
     InvalidToken(char),
+    UnexpectedToken { expected: String, found: String },
+    InvalidExpr(String),
 }
