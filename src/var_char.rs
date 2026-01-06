@@ -3,9 +3,9 @@ use std::fmt::Display;
 pub const VAR_CHAR_CAPACITY: usize = 32;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct VarChar{
+pub struct VarChar {
     length: u8,
-    data: [char; VAR_CHAR_CAPACITY]
+    data: [char; VAR_CHAR_CAPACITY],
 }
 
 pub struct StringTooLong;
@@ -18,7 +18,11 @@ impl VarChar {
 
 impl Display for VarChar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", String::from_iter(self.data.iter().take(self.length as usize)))
+        write!(
+            f,
+            "{}",
+            String::from_iter(self.data.iter().take(self.length as usize))
+        )
     }
 }
 
@@ -36,9 +40,6 @@ impl TryFrom<String> for VarChar {
             *dest = data;
         }
 
-        Ok(Self {
-            length,
-            data,
-        })
+        Ok(Self { length, data })
     }
 }
