@@ -200,11 +200,11 @@ impl Parser {
         self.expect(&Token::Create)?;
         self.expect(&Token::Table)?;
         let table = self.consume_ident()?;
-        let defs = self.parse_defs_clause()?.boxed();
+        let defs = self.parse_defs_clause()?;
         let clauses = self.parse_optional_clauses()?;
         Ok(Stmt::Create {
             table,
-            defs,
+            defs: defs.boxed(),
             clauses,
         })
     }
@@ -214,6 +214,7 @@ impl Parser {
         self.expect(&Token::Insert)?;
         self.expect(&Token::Into)?;
         let table = self.consume_ident()?;
+        // 부분 컬럼 선택 '(<col1>, <col2>, ...)' 처리
         let columns = if &self.curr == &Token::LParen {
             self.parse_columns_clause()?
         } else {
