@@ -9,19 +9,19 @@ pub enum Token {
     // 식별자
     Ident(String),
     // 키워드
-    Create,    // CREATE
-    Table,     // TABLE
-    Insert,    // INSERT
-    Into,      // INTO
-    Values,    // VALUES
-    Select,    // SELECT
-    From,      // FROM
-    Where,     // WHERE
-    Update,    // UPDATE
-    Set,       // SET
-    Alter,     // ALTER
-    Delete,    // DELETE
-    Drop,      // DROP
+    Create, // CREATE
+    Table,  // TABLE
+    Insert, // INSERT
+    Into,   // INTO
+    Values, // VALUES
+    Select, // SELECT
+    From,   // FROM
+    Where,  // WHERE
+    Update, // UPDATE
+    Set,    // SET
+    Alter,  // ALTER
+    Delete, // DELETE
+    Drop,   // DROP
     // 구분자
     Dot,       // .
     Comma,     // ,
@@ -29,34 +29,32 @@ pub enum Token {
     LParen,    // (
     RParen,    // )
     // 연산자
-    Not,       // NOT
-    And,       // AND
-    Or,        // OR
-    In,        // IN
-    Like,      // LIKE
-    Between,   // BETWEEN
-    Is,        // IS
-    Eq,        // =
-    Gt,        // >
-    Lt,        // <
-    Ge,        // >=
-    Le,        // <=
-    Add,       // +
-    Sub,       // -
-    Mul,       // *
-    Div,       // /
+    Not,     // NOT
+    And,     // AND
+    Or,      // OR
+    In,      // IN
+    Like,    // LIKE
+    Between, // BETWEEN
+    Is,      // IS
+    Eq,      // =
+    Gt,      // >
+    Lt,      // <
+    Ge,      // >=
+    Le,      // <=
+    Add,     // +
+    Sub,     // -
+    Mul,     // *
+    Div,     // /
 }
 
 pub struct Lexer {
     src: VecDeque<char>,
-    code: bool,
 }
 
 impl Lexer {
     pub fn new(src: &str) -> Self {
         Lexer {
             src: src.chars().collect(),
-            code: false,
         }
     }
 
@@ -132,8 +130,7 @@ impl Lexer {
     fn lex_num(&mut self, start: char) -> Result<Token, LexErr> {
         let mut float = false;
         let mut out = String::from(start);
-        while let Some(ch) = self.curr()
-        {
+        while let Some(ch) = self.curr() {
             // ! `curr()`의 반환값이 `Some`이므로 안전함
             if Self::is_digit(ch) {
                 out.push(self.walk().unwrap());
@@ -246,7 +243,10 @@ mod test {
     fn test_identifiers() {
         let mut lexer = Lexer::new("my_table user_id123");
         assert_eq!(lexer.next().unwrap(), Token::Ident("my_table".to_string()));
-        assert_eq!(lexer.next().unwrap(), Token::Ident("user_id123".to_string()));
+        assert_eq!(
+            lexer.next().unwrap(),
+            Token::Ident("user_id123".to_string())
+        );
     }
 
     #[test]
