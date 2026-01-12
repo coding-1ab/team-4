@@ -4,33 +4,46 @@ use std::mem::{discriminant, replace};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
+    // CREATE TABLE [IF NOT EXISTS] <table> (<col1> <type>, <col2> <type>, ...)
     Create {
-        table: Box<str>,
-        clauses: Vec<Clause>,
+        table: Box<str>,                    // table name
+        columns: Vec<(Box<str>, Box<str>)>, // col name, col type
+        if_not_exists: bool,                // run if not exists
     },
+    // INSERT INTO <table> [(<col1>, <col2>, ...)] VALUES (<val1>, <val2>, ...)
     Insert {
-        table: Box<str>,
-        clauses: Vec<Clause>,
+        table: Box<str>,        // table name
+        columns: Vec<Box<str>>, // col name
+        values: Vec<Vec<Expr>>, // row [val expr]
     },
+    // SELECT [DISTINCT] <col1>, <col2>, ... FROM <table>
+    //     [WHERE] [GROUP BY] [HAVING] [ORDER BY] [LIMIT]
     Select {
-        table: Box<str>,
-        clauses: Vec<Clause>,
+        table: Box<str>,                     // table name
+        columns: Vec<Expr>,                  // col name (or expr)
+        distinct: bool,                      // distinct flag
+        where_clause: Option<Expr>,          // condition expr
+        group_by: Option<Vec<Expr>>,         // col name (or expr)
+        having: Option<Expr>,                // condition expr
+        order_by: Option<Vec<(Expr, bool)>>, // col name, ASC/DESC
+        limit: Option<u64>,                  // limit count
     },
+    // UPDATE <table> SET <col1> = <val1>, <col2> = <val2>, ... [WHERE]
     Update {
-        table: Box<str>,
-        clauses: Vec<Clause>,
+        table: Box<str>,                // table name
+        assigns: Vec<(Box<str>, Expr)>, // col name, val expr
+        where_clause: Option<Expr>,     // condition expr
     },
+    // DELETE FROM <table> [WHERE]
     Delete {
-        table: Box<str>,
-        clauses: Vec<Clause>,
+        table: Box<str>,            // table name
+        where_clause: Option<Expr>, // condition expr
     },
+    // DROP TABLE [IF EXISTS] <table> [RESTRICT|CASCADE]
     Drop {
-        table: Box<str>,
-    },
-    Union {
-        left: Box<Stmt>,
-        right: Box<Stmt>,
-        all: bool,
+        table: Box<str>, // table name
+        if_exists: bool, // run if exists
+        cascade: bool,   // run despite dependent
     },
 }
 
@@ -195,10 +208,24 @@ impl Parser {
         self.expect(&Token::Create)?;
         self.expect(&Token::Table)?;
         let table = self.consume_ident()?;
-        let mut clauses = vec![];
-        clauses.push(self.parse_defs_clause()?);
-        clauses.extend(self.parse_optional_clauses()?);
-        Ok(Stmt::Create { table, clauses })
+        self.expect(&Token::LParen)?;
+        let mut defs = Vec::new();
+        loop {
+            let col_name = self.consume_ident()?;
+            let col_type = self.consume_ident()?;
+            defs.push((col_name, col_type));
+            match self.next()? {
+                Token::Comma => continue,
+                Token::RParen => break,
+                tok => {
+                    return Err(QueryErr::UnexpectedToken {
+                        expected: "',' or ')'".into(),
+                        found: format!("{:?}", tok),
+                    });
+                }
+            }
+        }
+        Ok(Stmt::Create { table, defs })
     }
 
     fn parse_insert(&mut self) -> Result<Stmt> {
@@ -206,29 +233,40 @@ impl Parser {
         self.expect(&Token::Insert)?;
         self.expect(&Token::Into)?;
         let table = self.consume_ident()?;
-        let mut clauses = vec![];
-        // 부분 컬럼 선택 '(<col1>, <col2>, ...)' 처리
-        if &self.curr == &Token::LParen {
-            clauses.push(self.parse_columns_clause()?);
-        }
+        let columns = if &self.curr == &Token::LParen {
+            self.parse_clause(true, |p| p.consume_ident())?
+        } else {
+            vec![]
+        };
         self.expect(&Token::Values)?;
-        clauses.push(self.parse_defs_clause()?);
-        // INSERT는 부가 절이 없음
-        Ok(Stmt::Insert { table, clauses })
+        let values = self.parse_clause(false, |p| p.parse_expr(0))?;
+        Ok(Stmt::Insert {
+            table,
+            columns,
+            values,
+        })
     }
 
     fn parse_select(&mut self) -> Result<Stmt> {
-        // SELECT <col1>, <col2>, ... FROM <table> [WHERE ...] [ORDER BY ...] [LIMIT ...]
+        // SELECT <col1>, <col2>, ... FROM <table>
+        //     [WHERE] [GROUP BY] [HAVING] [ORDER BY] [LIMIT]
         self.expect(&Token::Select)?;
         let mut clauses = vec![];
         // 전체 컬럼 선택 '*' 처리
-        if !self.maybe(&Token::Mul)? {
-            clauses.push(self.parse_columns_clause()?);
-        }
+        let columns = if !self.maybe(&Token::Mul)? {
+            self.parse_clause(false, |p| p.consume_ident())?
+        } else {
+            vec![]
+        };
         self.expect(&Token::From)?;
         let table = self.consume_ident()?;
-        clauses.extend(self.parse_optional_clauses()?);
-        Ok(Stmt::Select { table, clauses })
+        // TODO: 최소 구현 우선
+        let where_clause = None;
+        let group_by = None;
+        let having = None;
+        let order_by = None;
+        let limit = None;
+        Ok(Stmt::Select { table, columns, where_clause, group_by, having, order_by, limit })
     }
 
     fn parse_update(&mut self) -> Result<Stmt> {
@@ -259,88 +297,24 @@ impl Parser {
         Ok(Stmt::Drop { table })
     }
 
-    fn parse_values_clause(&mut self) -> Result<Clause> {
-        self.expect(&Token::LParen)?;
-        let mut values = Vec::new();
-        loop {
-            values.push(self.parse_expr(0)?);
-            match self.next()? {
-                Token::Comma => continue,
-                Token::RParen => break,
-                tok => {
-                    return Err(QueryErr::UnexpectedToken {
-                        expected: "',' or ')'".into(),
-                        found: format!("{:?}", tok),
-                    });
-                }
-            }
+    fn parse_clause<T, F>(&mut self, with_parens: bool, mut parse_fn: F) -> Result<Vec<T>>
+    where
+        F: FnMut(&mut Self) -> Result<T>,
+    {
+        if with_parens {
+            self.expect(&Token::LParen)?;
         }
-        Ok(Clause::Values(values))
-    }
-
-    fn parse_columns_clause(&mut self) -> Result<Clause> {
-        let mut columns = Vec::new();
-        if self.maybe(&Token::LParen)? {
-            loop {
-                columns.push(self.consume_ident()?);
-                match self.next()? {
-                    Token::Comma => continue,
-                    Token::RParen => break,
-                    tok => {
-                        return Err(QueryErr::UnexpectedToken {
-                            expected: "',' or ')'".into(),
-                            found: format!("{:?}", tok),
-                        });
-                    }
-                }
-            }
-        } else if self.curr == Token::Mul {
-            self.next()?;
-            columns.push("*".into());
-        } else {
-            loop {
-                columns.push(self.consume_ident()?);
-                if !self.maybe(&Token::Comma)? {
-                    break;
-                }
-            }
-        }
-        Ok(Clause::Columns(columns))
-    }
-
-    fn parse_assigns_clause(&mut self) -> Result<Clause> {
-        let mut assigns = Vec::new();
+        let mut items = Vec::new();
         loop {
-            let col = self.consume_ident()?;
-            self.expect(&Token::Eq)?;
-            let val = self.parse_expr(0)?;
-            assigns.push((col, val));
+            items.push(parse_fn(self)?);
             if !self.maybe(&Token::Comma)? {
                 break;
             }
         }
-        Ok(Clause::Assigns(assigns))
-    }
-
-    fn parse_defs_clause(&mut self) -> Result<Clause> {
-        self.expect(&Token::LParen)?;
-        let mut defs = Vec::new();
-        loop {
-            let col_name = self.consume_ident()?;
-            let col_type = self.consume_ident()?;
-            defs.push((col_name, col_type));
-            match self.next()? {
-                Token::Comma => continue,
-                Token::RParen => break,
-                tok => {
-                    return Err(QueryErr::UnexpectedToken {
-                        expected: "',' or ')'".into(),
-                        found: format!("{:?}", tok),
-                    });
-                }
-            }
+        if with_parens {
+            self.expect(&Token::RParen)?;
         }
-        Ok(Clause::Defs(defs))
+        Ok(items)
     }
 
     fn parse_optional_clauses(&mut self) -> Result<Vec<Clause>> {
