@@ -34,6 +34,18 @@ pub enum Stmt {
         assigns: Vec<(Box<str>, Expr)>, // col name, val expr
         where_clause: Option<Expr>,     // condition expr
     },
+    AlterAdd {
+        table: Box<str>,              // table name
+        column: (Box<str>, Box<str>), // col name, col type
+    },
+    AlterDrop {
+        table: Box<str>,  // table name
+        column: Box<str>, // col name
+    },
+    AlterRename {
+        table: Box<str>,    // table name
+        new_name: Box<str>, // new table name
+    },
     // DELETE FROM <table> [WHERE]
     Delete {
         table: Box<str>,            // table name
@@ -41,7 +53,7 @@ pub enum Stmt {
     },
     // TRUNCATE TABLE <table>
     Truncate {
-        table: Box<str>,
+        table: Box<str>, // table name
     },
     // DROP TABLE [IF EXISTS] <table> [RESTRICT|CASCADE]
     Drop {
@@ -135,10 +147,10 @@ impl Parser {
         match token {
             Token::Or => 1,
             Token::And => 2,
-            Token::Eq => 3,
-            Token::Gt | Token::Lt | Token::Ge | Token::Le => 4,
-            Token::Add | Token::Sub => 5,
-            Token::Mul | Token::Div => 6,
+            Token::OpEq => 3,
+            Token::OpGt | Token::OpLt | Token::OpGe | Token::OpLe => 4,
+            Token::OpAdd | Token::OpSub => 5,
+            Token::OpMul | Token::OpDiv => 6,
             Token::LParen => 7,
             _ => 0,
         }
@@ -165,10 +177,13 @@ impl Parser {
         Ok(())
     }
 
-    fn maybe(&mut self, tokens: &[Token]) -> bool {
-        match self.expect(tokens) {
-            Ok(_) => true,
-            Err(_) => false,
+    fn maybe(&mut self, tokens: &[Token]) -> Result<bool> {
+        if tokens.is_empty() {
+            Ok(true)
+        } else if discriminant(&self.curr) != discriminant(&tokens[0]) {
+            Ok(false)
+        } else {
+            self.expect(&tokens).map(|_| true)
         }
     }
 
@@ -198,6 +213,7 @@ impl Parser {
             Token::Insert => self.parse_insert(),
             Token::Select => self.parse_select(),
             Token::Update => self.parse_update(),
+            Token::Alter => self.parse_alter(),
             Token::Delete => self.parse_delete(),
             Token::Truncate => self.parse_truncate(),
             Token::Drop => self.parse_drop(),
@@ -211,7 +227,7 @@ impl Parser {
     fn parse_create(&mut self) -> Result<Stmt> {
         // CREATE TABLE [IF NOT EXISTS] <table> (<col1> <type>, <col2> <type>, ...)
         self.expect(&[Token::Create, Token::Table])?;
-        let if_not_exists = self.maybe(&[Token::If, Token::Not, Token::Exists]);
+        let if_not_exists = self.maybe(&[Token::If, Token::Not, Token::Exists])?;
         let table = self.consume_ident()?;
         self.expect(&[Token::LParen])?;
         let columns = self.parse_list_clause(true, |p| {
@@ -227,7 +243,7 @@ impl Parser {
     }
 
     fn parse_insert(&mut self) -> Result<Stmt> {
-        // INSERT INTO <table> [(<col1>, <col2>, ...)] VALUES (<val1>, <val2>, ...)
+        // INSERT INTO <table> [(<col1>, <col2>, ...)] ...
         self.expect(&[Token::Insert, Token::Into])?;
         let table = self.consume_ident()?;
         let columns = if &self.curr == &Token::LParen {
@@ -235,22 +251,22 @@ impl Parser {
         } else {
             vec![]
         };
-        if self.maybe(&[Token::Values]) {
+        if self.maybe(&[Token::Values])? {
             self.parse_insert_values(table, columns)
-        } else {
+        } else if self.maybe(&[Token::Select])? {
             unimplemented!("최소 구현 우선 (INSERT ... SELECT 지원 보류)")
+        } else {
+            Err(QueryErr::UnexpectedToken {
+                expected: "VALUES or SELECT".into(),
+                found: format!("{:?}", self.curr),
+            })
         }
     }
 
-    fn parse_insert_values(
-        &mut self,
-        table: Box<str>,
-        columns: Vec<Box<str>>,
-    ) -> Result<Stmt> {
-        self.expect(&[Token::Values])?;
-        let values = self.parse_list_clause(false, |p| {
-            p.parse_list_clause(true, |p| p.parse_expr(0))
-        })?;
+    fn parse_insert_values(&mut self, table: Box<str>, columns: Vec<Box<str>>) -> Result<Stmt> {
+        // ... VALUES (<val1>, <val2>, ...)
+        let values =
+            self.parse_list_clause(false, |p| p.parse_list_clause(true, |p| p.parse_expr(0)))?;
         Ok(Stmt::InsertValues {
             table,
             columns,
@@ -262,9 +278,9 @@ impl Parser {
         // SELECT [DISTINCT] <col1>, <col2>, ... FROM <table>
         //     [WHERE] [GROUP BY] [HAVING] [ORDER BY] [LIMIT]
         self.expect(&[Token::Select])?;
-        let distinct = self.maybe(&[Token::Distinct]);
+        let distinct = self.maybe(&[Token::Distinct])?;
         // 전체 컬럼 선택 '*' 처리
-        let columns = if !self.maybe(&[Token::Mul]) {
+        let columns = if !self.maybe(&[Token::OpMul])? {
             self.parse_list_clause(false, |p| p.parse_expr(0))?
         } else {
             vec![]
@@ -296,7 +312,7 @@ impl Parser {
         self.expect(&[Token::Set])?;
         let assigns = self.parse_list_clause(false, |p| {
             let col_name = p.consume_ident()?;
-            p.expect(&[Token::Eq])?;
+            p.expect(&[Token::OpEq])?;
             let val_expr = p.parse_expr(0)?;
             Ok((col_name, val_expr))
         })?;
@@ -307,6 +323,43 @@ impl Parser {
             assigns,
             where_clause,
         })
+    }
+
+    fn parse_alter(&mut self) -> Result<Stmt> {
+        // ALTER TABLE <table> ...
+        self.expect(&[Token::Alter, Token::Table])?;
+        let table = self.consume_ident()?;
+        if self.maybe(&[Token::Add, Token::Column])? {
+            self.parse_alter_add(table)
+        } else if self.maybe(&[Token::Drop, Token::Column])? {
+            self.parse_alter_drop(table)
+        } else if self.maybe(&[Token::Rename])? {
+            self.parse_alter_rename(table)
+        } else {
+            Err(QueryErr::UnexpectedToken {
+                expected: "ADD, DROP, or RENAME".into(),
+                found: format!("{:?}", self.curr),
+            })
+        }
+    }
+    fn parse_alter_add(&mut self, table: Box<str>) -> Result<Stmt> {
+        // ... ADD COLUMN <col_name> <col_type>
+        let col_name = self.consume_ident()?;
+        let col_type = self.consume_ident()?;
+        let column = (col_name, col_type);
+        Ok(Stmt::AlterAdd { table, column })
+    }
+
+    fn parse_alter_drop(&mut self, table: Box<str>) -> Result<Stmt> {
+        // ... DROP COLUMN <col_name>
+        let column = self.consume_ident()?;
+        Ok(Stmt::AlterDrop { table, column })
+    }
+
+    fn parse_alter_rename(&mut self, table: Box<str>) -> Result<Stmt> {
+        // ... RENAME TO <new_table_name>
+        let new_name = self.consume_ident()?;
+        Ok(Stmt::AlterRename { table, new_name })
     }
 
     fn parse_delete(&mut self) -> Result<Stmt> {
@@ -330,9 +383,9 @@ impl Parser {
     fn parse_drop(&mut self) -> Result<Stmt> {
         // DROP TABLE [IF EXISTS] <table> [RESTRICT|CASCADE]
         self.expect(&[Token::Drop, Token::Table])?;
+        let if_exists = self.maybe(&[Token::If, Token::Exists])?;
         let table = self.consume_ident()?;
-        let if_exists = self.maybe(&[Token::If, Token::Exists]);
-        let cascade = !self.maybe(&[Token::Restrict]) && self.maybe(&[Token::Cascade]);
+        let cascade = !self.maybe(&[Token::Restrict])? && self.maybe(&[Token::Cascade])?;
         Ok(Stmt::Drop {
             table,
             if_exists,
@@ -340,11 +393,7 @@ impl Parser {
         })
     }
 
-    fn parse_list_clause<T, F>(
-        &mut self,
-        with_parens: bool,
-        mut parse_fn: F,
-    ) -> Result<Vec<T>>
+    fn parse_list_clause<T, F>(&mut self, with_parens: bool, mut parse_fn: F) -> Result<Vec<T>>
     where
         F: FnMut(&mut Self) -> Result<T>,
     {
@@ -354,7 +403,7 @@ impl Parser {
         let mut items = Vec::new();
         loop {
             items.push(parse_fn(self)?);
-            if !self.maybe(&[Token::Comma]) {
+            if !self.maybe(&[Token::Comma])? {
                 break;
             }
         }
@@ -405,7 +454,7 @@ impl Parser {
             Token::Float(f) => Ok(Expr::Float(f)),
             Token::Text(t) => Ok(Expr::Text(t.into_boxed_str())),
             Token::Ident(i) => Ok(Expr::Ident(i.into_boxed_str())),
-            op @ (Token::Not | Token::Sub) => {
+            op @ (Token::Not | Token::OpSub) => {
                 let right = self.parse_expr(7)?.boxed();
                 Ok(Expr::Unary { op, right })
             }
