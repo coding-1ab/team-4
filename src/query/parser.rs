@@ -232,7 +232,7 @@ impl Parser {
         self.expect(&[Token::LParen])?;
         let columns = self.parse_list_clause(true, |p| {
             let col_name = p.consume_ident()?;
-            let col_type = p.consume_ident()?;
+            let col_type = p.consume_type()?;
             Ok((col_name, col_type))
         })?;
         Ok(Stmt::Create {
@@ -345,7 +345,7 @@ impl Parser {
     fn parse_alter_add(&mut self, table: Box<str>) -> Result<Stmt> {
         // ... ADD COLUMN <col_name> <col_type>
         let col_name = self.consume_ident()?;
-        let col_type = self.consume_ident()?;
+        let col_type = self.consume_type()?;
         let column = (col_name, col_type);
         Ok(Stmt::AlterAdd { table, column })
     }
@@ -433,6 +433,19 @@ impl Parser {
             Token::Ident(name) => Ok(name.into_boxed_str()),
             tok => Err(QueryErr::UnexpectedToken {
                 expected: "identifier".into(),
+                found: format!("{:?}", tok),
+            }),
+        }
+    }
+
+    fn consume_type(&mut self) -> Result<Box<str>> {
+        match self.next()? {
+            Token::BoolType => Ok("BOOLEAN".into()),
+            Token::IntType => Ok("INTEGER".into()),
+            Token::FloatType => Ok("FLOAT".into()),
+            Token::TextType => Ok("TEXT".into()),
+            tok => Err(QueryErr::UnexpectedToken {
+                expected: "type".into(),
                 found: format!("{:?}", tok),
             }),
         }
