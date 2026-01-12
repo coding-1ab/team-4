@@ -11,7 +11,7 @@ pub enum Stmt {
         if_not_exists: bool,                // run if not exists
     },
     // INSERT INTO <table> [(<col1>, <col2>, ...)] VALUES (<val1>, <val2>, ...)
-    Insert {
+    InsertValues {
         table: Box<str>,        // table name
         columns: Vec<Box<str>>, // col name
         values: Vec<Vec<Expr>>, // row [val expr]
@@ -38,6 +38,10 @@ pub enum Stmt {
     Delete {
         table: Box<str>,            // table name
         where_clause: Option<Expr>, // condition expr
+    },
+    // TRUNCATE TABLE <table>
+    Truncate {
+        table: Box<str>,
     },
     // DROP TABLE [IF EXISTS] <table> [RESTRICT|CASCADE]
     Drop {
@@ -195,6 +199,7 @@ impl Parser {
             Token::Select => self.parse_select(),
             Token::Update => self.parse_update(),
             Token::Delete => self.parse_delete(),
+            Token::Truncate => self.parse_truncate(),
             Token::Drop => self.parse_drop(),
             tok => Err(QueryErr::UnexpectedToken {
                 expected: "SELECT, INSERT, UPDATE, DELETE, CREATE, DROP".into(),
@@ -230,11 +235,23 @@ impl Parser {
         } else {
             vec![]
         };
+        if self.maybe(&[Token::Values]) {
+            self.parse_insert_values(table, columns)
+        } else {
+            unimplemented!("최소 구현 우선 (INSERT ... SELECT 지원 보류)")
+        }
+    }
+
+    fn parse_insert_values(
+        &mut self,
+        table: Box<str>,
+        columns: Vec<Box<str>>,
+    ) -> Result<Stmt> {
         self.expect(&[Token::Values])?;
         let values = self.parse_list_clause(false, |p| {
             p.parse_list_clause(true, |p| p.parse_expr(0))
         })?;
-        Ok(Stmt::Insert {
+        Ok(Stmt::InsertValues {
             table,
             columns,
             values,
@@ -302,6 +319,12 @@ impl Parser {
             table,
             where_clause,
         })
+    }
+
+    fn parse_truncate(&mut self) -> Result<Stmt> {
+        self.expect(&[Token::Truncate, Token::Table])?;
+        let table = self.consume_ident()?;
+        Ok(Stmt::Truncate { table })
     }
 
     fn parse_drop(&mut self) -> Result<Stmt> {
