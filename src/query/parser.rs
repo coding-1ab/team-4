@@ -414,7 +414,7 @@ impl Parser {
         Ok(items)
     }
 
-    fn consume_ident(&mut self) -> Result<Box<str>> {
+    fn consume_ident(&mut self) -> Result<Box<str>> { // TODO: 아마도 버그의 원인
         match self.next()? {
             Token::Ident(name) => Ok(name.into_boxed_str()),
             tok => Err(QueryErr::UnexpectedToken {

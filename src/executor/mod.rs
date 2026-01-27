@@ -128,6 +128,11 @@ use crate::query::{Expr, Lexer, Parser, Stmt};
 use crate::storage::{DataType, DataValue};
 use std::collections::HashMap;
 
+pub struct ColumnId(pub u64);
+pub struct RowId(pub u64);
+pub struct TableId(pub u64);
+
+
 pub enum QueryResult {
     Rows(Vec<Vec<String>>),
     // Count(usize), TODO: COUNT 함수 구현 후 사용
@@ -142,16 +147,22 @@ pub struct Executor {
 
 impl Executor {
     pub fn new() -> Self {
-        todo!()
+        Self {
+            mock: HashMap::new(),
+        }
     }
 
     pub fn run(&mut self, src: String) -> QueryResult {
         let lexer = Lexer::new(&src);
         let parser = Parser::new(lexer);
-        let stmts = parser.unwrap().parse().unwrap(); // TODO: 오류 처리
+        let stmts = parser.unwrap().parse(); // TODO: 오류 처리
+        if let Err(e) = stmts {
+            return QueryResult::Error(e.to_string());
+        }
+        let stmts = stmts.unwrap();
         for stmt in stmts {
             match stmt {
-                _ => todo!(),
+                _ => self.execute_simple(stmt),
             }
         }
         QueryResult::Success

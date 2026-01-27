@@ -7,3 +7,6 @@ edition = "2024"
 pinax = "0.1.0"
 clap = { version = "4.5.54", features = ["derive"] }
 tokio = { version = "1.49.0", features = ["full"] }
+eframe = "^0.33"
+egui_extras = "^0.33"
+syntect = "^5.3"

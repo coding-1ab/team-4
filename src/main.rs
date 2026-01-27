@@ -1,4 +1,5 @@
 pub mod executor;
+pub mod gui;
 pub mod query;
 pub mod storage;
 pub mod var_char;
@@ -19,12 +20,13 @@ fn main() {
     let args = Args::parse();
     // 데이터베이스 유무 체크
     if let None = args.database {
-        eprintln!("No database specified. \
-                   use '--help' for more information.");
-        return
-    } else if let Some(ref path) = args.database && !path.exists() {
+        launch_gui();
+        return;
+    } else if let Some(ref path) = args.database
+        && !path.exists()
+    {
         eprintln!("Database file not found: '{}'", path.display());
-        return
+        return;
     }
     // ! 위 조건문에서 확인했으므로 안전
     let path = args.database.unwrap();
@@ -56,4 +58,8 @@ fn main() {
             println!("Failed to read line.");
         }
     }
+}
+
+fn launch_gui() {
+    gui::Application::new().launch();
 }
