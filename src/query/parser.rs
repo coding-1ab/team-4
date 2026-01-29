@@ -230,7 +230,6 @@ impl Parser {
         self.expect(&[Token::Create, Token::Table])?;
         let if_not_exists = self.maybe(&[Token::If, Token::Not, Token::Exists])?;
         let table = self.consume_ident()?;
-        self.expect(&[Token::LParen])?;
         let columns = self.parse_list_clause(true, |p| {
             let col_name = p.consume_ident()?;
             let col_type = p.consume_type()?;
@@ -414,7 +413,7 @@ impl Parser {
         Ok(items)
     }
 
-    fn consume_ident(&mut self) -> Result<Box<str>> { // TODO: 아마도 버그의 원인
+    fn consume_ident(&mut self) -> Result<Box<str>> {
         match self.next()? {
             Token::Ident(name) => Ok(name.into_boxed_str()),
             tok => Err(QueryErr::UnexpectedToken {
